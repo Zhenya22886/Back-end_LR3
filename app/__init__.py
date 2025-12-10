@@ -13,3 +13,4 @@ db.init_app(app)
 migrate.init_app(app, db)
 
 from app import views 
+from app import models 
