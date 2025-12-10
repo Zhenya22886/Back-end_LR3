@@ -1,9 +1,10 @@
 from datetime import datetime, timezone
+from decimal import Decimal
 
 from flask import jsonify, request
 
 from app import app, db
-from app.models import User, Category, Record, Account  
+from app.models import User, Category, Record, Account
 
 
 # Healthcheck
@@ -45,6 +46,13 @@ def record_to_dict(record: Record) -> dict:
         "amount": float(record.amount) if record.amount is not None else None,
     }
 
+
+def account_to_dict(account: Account) -> dict:
+    return {
+        "id": account.id,
+        "user_id": account.user_id,
+        "balance": float(account.balance) if account.balance is not None else 0.0,
+    }
 
 # USERS 
 
@@ -89,7 +97,56 @@ def list_users():
     return jsonify([user_to_dict(u) for u in all_users]), 200
 
 
+# ACCOUNTS 
+
+@app.get("/user/<int:user_id>/account")
+def get_account(user_id: int):
+    user = User.query.get(user_id)
+    if user is None:
+        return error_response("User not found", 404)
+
+    account = user.account
+    if account is None:
+        account = Account(user_id=user.id, balance=Decimal("0"))
+        db.session.add(account)
+        db.session.commit()
+
+    return jsonify(account_to_dict(account)), 200
+
+
+@app.post("/user/<int:user_id>/account/deposit")
+def deposit_to_account(user_id: int):
+    user = User.query.get(user_id)
+    if user is None:
+        return error_response("User not found", 404)
+
+    data = request.get_json(silent=True) or {}
+
+    if "amount" not in data:
+        return error_response("Field 'amount' is required")
+
+    try:
+        amount_value = float(data["amount"])
+    except (TypeError, ValueError):
+        return error_response("Field 'amount' must be a number")
+
+    if amount_value <= 0:
+        return error_response("Field 'amount' must be positive")
+
+    amount_dec = Decimal(str(amount_value))
+
+    account = user.account
+    if account is None:
+        account = Account(user_id=user.id, balance=Decimal("0"))
+        db.session.add(account)
+
+    account.balance = (account.balance or Decimal("0")) + amount_dec
+    db.session.commit()
+
+    return jsonify(account_to_dict(account)), 200
+
 # CATEGORIES 
+
 @app.get("/category")
 def list_categories():
     categories = Category.query.order_by(Category.id.asc()).all()
