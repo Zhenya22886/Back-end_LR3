@@ -6,7 +6,6 @@ from flask import jsonify, request
 from app import app, db
 from app.models import User, Category, Record, Account
 
-
 # Healthcheck
 
 @app.get("/healthcheck")
@@ -15,7 +14,6 @@ def healthcheck():
         "status": "ok",
         "date": datetime.now(timezone.utc).isoformat()
     }), 200
-
 
 # Helpers
 
@@ -237,6 +235,8 @@ def create_record():
     if amount_value <= 0:
         return error_response("Field 'amount' must be positive")
 
+    amount_dec = Decimal(str(amount_value))
+
     created_at_str = data.get("created_at")
     if created_at_str:
         try:
@@ -248,11 +248,24 @@ def create_record():
     else:
         created_at = datetime.now(timezone.utc)
 
+    account = user.account
+    if account is None:
+        account = Account(user_id=user.id, balance=Decimal("0"))
+        db.session.add(account)
+        db.session.flush()  
+
+    current_balance = account.balance or Decimal("0")
+
+    if current_balance < amount_dec:
+        return error_response("Insufficient funds on account", 400)
+
+    account.balance = current_balance - amount_dec
+
     record = Record(
         user_id=user.id,
         category_id=category.id,
         created_at=created_at,
-        amount=amount_value,
+        amount=amount_dec,
     )
 
     db.session.add(record)
