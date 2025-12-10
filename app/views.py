@@ -1,8 +1,12 @@
 from datetime import datetime, timezone
+
 from flask import jsonify, request
 
-from app import app
+from app import app, db
+from app.models import User
 
+
+# Healthcheck
 
 @app.get("/healthcheck")
 def healthcheck():
@@ -11,36 +15,50 @@ def healthcheck():
         "date": datetime.now(timezone.utc).isoformat()
     }), 200
 
+
+
 users = {}
-
 categories = {}
-
 records = {}
 
-next_user_id = 1
 next_category_id = 1
 next_record_id = 1
 
 
+# Helpers
+
 def error_response(message: str, status_code: int = 400):
-    
+    """Уніфікована відповідь з помилкою."""
     return jsonify({"error": message}), status_code
+
+
+def user_to_dict(user: User) -> dict:
+    return {
+        "id": user.id,
+        "name": user.name,
+    }
+
+
+# USERS 
 
 @app.get("/user/<int:user_id>")
 def get_user(user_id: int):
-    user = users.get(user_id)
-    if not user:
+    user = User.query.get(user_id)
+    if user is None:
         return error_response("User not found", 404)
-    return jsonify(user), 200
+    return jsonify(user_to_dict(user)), 200
 
 
 @app.delete("/user/<int:user_id>")
 def delete_user(user_id: int):
-    
-    if user_id not in users:
+    user = User.query.get(user_id)
+    if user is None:
         return error_response("User not found", 404)
 
-    del users[user_id]
+    db.session.delete(user)
+    db.session.commit()
+
+    users.pop(user_id, None)
 
     to_delete = [rid for rid, rec in records.items() if rec["user_id"] == user_id]
     for rid in to_delete:
@@ -51,27 +69,29 @@ def delete_user(user_id: int):
 
 @app.post("/user")
 def create_user():
-    global next_user_id
     data = request.get_json(silent=True) or {}
 
     name = data.get("name")
     if not name:
         return error_response("Field 'name' is required")
 
-    user = {
-        "id": next_user_id,
-        "name": name,
-    }
-    users[next_user_id] = user
-    next_user_id += 1
+    user = User(name=name)
+    db.session.add(user)
+    db.session.commit()
 
-    return jsonify(user), 201
+    users[user.id] = {"id": user.id, "name": user.name}
+
+    return jsonify(user_to_dict(user)), 201
 
 
 @app.get("/users")
 def list_users():
-    return jsonify(list(users.values())), 200
+    """Список усіх користувачів."""
+    all_users = User.query.order_by(User.id.asc()).all()
+    return jsonify([user_to_dict(u) for u in all_users]), 200
 
+
+# CATEGORIES 
 @app.get("/category")
 def list_categories():
     return jsonify(list(categories.values())), 200
@@ -107,16 +127,19 @@ def delete_category():
 
     del categories[category_id]
 
+    # видаляємо всі записи з цією категорією
     to_delete = [rid for rid, rec in records.items() if rec["category_id"] == category_id]
     for rid in to_delete:
         del records[rid]
 
     return jsonify({"status": "deleted"}), 200
 
+# RECORDS 
+
 @app.get("/record/<int:record_id>")
 def get_record(record_id: int):
     record = records.get(record_id)
-    if not record:
+    if record is None:
         return error_response("Record not found", 404)
     return jsonify(record), 200
 
@@ -125,6 +148,7 @@ def get_record(record_id: int):
 def delete_record(record_id: int):
     if record_id not in records:
         return error_response("Record not found", 404)
+
     del records[record_id]
     return jsonify({"status": "deleted"}), 200
 
@@ -147,14 +171,14 @@ def create_record():
     if category_id not in categories:
         return error_response("Category does not exist")
 
-    created_at = data.get("created_at")
-    if created_at is None:
-        created_at = datetime.now(timezone.utc).isoformat()
-
     try:
         amount = float(data["amount"])
     except (TypeError, ValueError):
         return error_response("Field 'amount' must be a number")
+
+    created_at = data.get("created_at")
+    if not created_at:
+        created_at = datetime.now(timezone.utc).isoformat()
 
     record = {
         "id": next_record_id,
