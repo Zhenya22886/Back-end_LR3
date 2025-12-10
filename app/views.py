@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from flask import jsonify, request
 
 from app import app, db
-from app.models import User
+from app.models import User, Category
 
 
 # Healthcheck
@@ -21,7 +21,7 @@ users = {}
 categories = {}
 records = {}
 
-next_category_id = 1
+next_category_id = 1  
 next_record_id = 1
 
 
@@ -39,7 +39,14 @@ def user_to_dict(user: User) -> dict:
     }
 
 
-# USERS 
+def category_to_dict(category: Category) -> dict:
+    return {
+        "id": category.id,
+        "name": category.name,
+    }
+
+
+# USERS (через ORM)
 
 @app.get("/user/<int:user_id>")
 def get_user(user_id: int):
@@ -86,34 +93,45 @@ def create_user():
 
 @app.get("/users")
 def list_users():
-    """Список усіх користувачів."""
+    
     all_users = User.query.order_by(User.id.asc()).all()
     return jsonify([user_to_dict(u) for u in all_users]), 200
 
 
 # CATEGORIES 
+
 @app.get("/category")
 def list_categories():
-    return jsonify(list(categories.values())), 200
+    """Список усіх категорій з БД."""
+    all_categories = Category.query.order_by(Category.id.asc()).all()
+
+    # оновлюємо in-memory словник для records-логіки
+    categories.clear()
+    for c in all_categories:
+        categories[c.id] = {"id": c.id, "name": c.name}
+
+    return jsonify([category_to_dict(c) for c in all_categories]), 200
 
 
 @app.post("/category")
 def create_category():
-    global next_category_id
     data = request.get_json(silent=True) or {}
 
     name = data.get("name")
     if not name:
         return error_response("Field 'name' is required")
 
-    category = {
-        "id": next_category_id,
-        "name": name,
-    }
-    categories[next_category_id] = category
-    next_category_id += 1
+    category = Category(name=name)
+    db.session.add(category)
+    try:
+        db.session.commit()
+    except Exception:
+        db.session.rollback()
+        return error_response("Category with this name already exists", 400)
 
-    return jsonify(category), 201
+    categories[category.id] = {"id": category.id, "name": category.name}
+
+    return jsonify(category_to_dict(category)), 201
 
 
 @app.delete("/category")
@@ -122,12 +140,15 @@ def delete_category():
     if category_id is None:
         return error_response("Query parameter 'id' is required")
 
-    if category_id not in categories:
+    category = Category.query.get(category_id)
+    if category is None:
         return error_response("Category not found", 404)
 
-    del categories[category_id]
+    db.session.delete(category)
+    db.session.commit()
 
-    # видаляємо всі записи з цією категорією
+    categories.pop(category_id, None)
+
     to_delete = [rid for rid, rec in records.items() if rec["category_id"] == category_id]
     for rid in to_delete:
         del records[rid]
