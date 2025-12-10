@@ -162,7 +162,7 @@
 
 #### Створення та активація віртуального середовища
 
-
+```
 python -m venv env
 
 .\env\Scripts\Activate.ps1
